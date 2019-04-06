@@ -3,7 +3,7 @@ import pytest
 
 import pyvips
 from helpers import JPEG_FILE, SRGB_FILE, colour_colourspaces, \
-    mono_colourspaces, assert_almost_equal_objects
+    mono_colourspaces, assert_almost_equal_objects, skip_if_no
 
 
 class TestColour:
@@ -71,6 +71,19 @@ class TestColour:
                 # but 8-bit we should hit exactly
                 assert abs(after - before) < 1
 
+        # we should be able to go from cmyk to any 3-band space and back again,
+        # approximately
+        cmyk = test.colourspace(pyvips.Interpretation.CMYK)
+        for end in colour_colourspaces:
+            im = cmyk.colourspace(end)
+            im2 = im.colourspace(pyvips.Interpretation.CMYK)
+
+            before = cmyk(10, 10)
+            after = im2(10, 10)
+
+            assert_almost_equal_objects(before, after, threshold=10)
+
+
     # test results from Bruce Lindbloom's calculator:
     # http://www.brucelindbloom.com
     def test_dE00(self):
@@ -111,6 +124,7 @@ class TestColour:
         assert abs(result - 4.97) < 0.5
         assert pytest.approx(alpha, 0.001) == 42.0
 
+    @skip_if_no("icc_import")
     def test_icc(self):
         test = pyvips.Image.new_from_file(JPEG_FILE)
 
@@ -149,6 +163,17 @@ class TestColour:
 
         im = test.icc_import()
         assert im.interpretation == pyvips.Interpretation.LAB
+
+    # even without lcms, we should have a working approximation
+    def test_cmyk(self):
+        test = pyvips.Image.new_from_file(JPEG_FILE)
+
+        im = test.colourspace("cmyk").colourspace("srgb")
+
+        before = test(582, 210)
+        after = im(582, 210)
+
+        assert_almost_equal_objects(before, after, threshold=10)
 
 
 if __name__ == '__main__':

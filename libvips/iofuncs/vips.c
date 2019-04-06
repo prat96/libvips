@@ -23,6 +23,8 @@
  * 	- validate strs as being utf-8 before we write
  * 9/4/18 Alexander--
  * 	- use O_TMPFILE, if available
+ * 23/7/18
+ * 	- escape ASCII control characters in XML
  */
 
 /*
@@ -135,7 +137,6 @@
  *
  * We use O_RDWR not O_WRONLY since after writing we may want to rewind the 
  * image and read from it.
- *
  */
 #define MODE_WRITE BINARYIZE (O_RDWR | O_CREAT | O_TRUNC)
 
@@ -185,39 +186,53 @@ vips__open_image_write( const char *filename, gboolean temp )
 	int flags;
 	int fd;
 
-	flags = MODE_WRITE;
+	fd = -1;
+
+#ifndef O_TMPFILE
+	if( temp ) 
+		g_info( "vips__open_image_write: O_TMPFILE not available" );
+#endif /*!O_TMPFILE*/
 
 #ifdef O_TMPFILE
 	/* Linux-only extension creates an unlinked file. CREAT and TRUNC must
 	 * be clear. The filename arg to open() must name a directory.
+	 *
+	 * This can fail since not all filesystems support it. In this case,
+	 * we open as a regular file and rely on the delete-on-close
+	 * mechanism, see vips_image_delete(). 
 	 */
 	if( temp ) {
 		char *dirname;
 
-		flags |= O_TMPFILE;
-		flags &= ~O_CREAT;
-		flags &= ~O_TRUNC;
-
+		g_info( "vips__open_image_write: opening with O_TMPFILE" );
 		dirname = g_path_get_dirname( filename ); 
-		fd = vips_tracked_open( dirname, flags, 0666 );
+		fd = vips_tracked_open( dirname, O_TMPFILE | O_RDWR , 0666 );
 		g_free( dirname ); 
-	}
-	else
-		fd = vips_tracked_open( filename, flags, 0666 );
-#else /*!O_TMPFILE*/
-	fd = vips_tracked_open( filename, flags, 0666 );
 
-#ifdef _O_TEMPORARY
-	/* On Windows, setting _O_TEMPORARY gets the file automatically
-	 * deleted on process exit, even if the processes crashes. See
-	 * vips_image_rewind() for what we do to help on *nix.
-	 */
-	if( temp )
-		flags |= _O_TEMPORARY;
-#endif /*_O_TEMPORARY*/
+		if( fd < 0 ) 
+			g_info( "vips__open_image_write: O_TMPFILE failed!" );
+	}
 #endif /*O_TMPFILE*/
 
+	flags = MODE_WRITE;
+
+#ifdef _O_TEMPORARY
+	/* On Windows, setting _O_TEMPORARY will delete the file automatically
+	 * on process exit, even if the processes crashes. 
+	 */
+	if( temp ) {
+		g_info( "vips__open_image_write: setting _O_TEMPORARY" );
+		flags |= _O_TEMPORARY;
+	}
+#endif /*_O_TEMPORARY*/
+
 	if( fd < 0 ) {
+		g_info( "vips__open_image_write: simple open" );
+		fd = vips_tracked_open( filename, flags, 0666 );
+	}
+
+	if( fd < 0 ) {
+		g_info( "vips__open_image_write: failed!" );
 		vips_error_system( errno, "VipsImage", 
 			_( "unable to write to \"%s\"" ), filename );
 		return( -1 );
@@ -769,38 +784,42 @@ dbuf_write_quotes( VipsDbuf *dbuf, const char *str )
 	}
 }
 
-/* Append a string to a buffer, but escape &<>.
+/* Append a string to a buffer, but escape stuff that xml hates in text. Our
+ * argument string is utf-8.
+ *
+ * XML rules:
+ *
+ * 	We must escape &<> 
+ * 	Don't escape \n, \t, \r
+ * 	Do escape the other ASCII codes. 
  */
 static void
 dbuf_write_amp( VipsDbuf *dbuf, const char *str )
 {
 	const char *p;
-	size_t len;
 
-	for( p = str; *p; p += len ) {
-		len = strcspn( p, "&<>" );
-
-		vips_dbuf_write( dbuf, (unsigned char *) p, len );
-		switch( p[len] ) {
-		case '&': 
-			vips_dbuf_writef( dbuf, "&amp;" );
-			len += 1;
-			break;
-
-		case '<': 
-			vips_dbuf_writef( dbuf, "&lt;" );
-			len += 1;
-			break;
-
-		case '>': 
-			vips_dbuf_writef( dbuf, "&gt;" );
-			len += 1;
-			break;
-
-		default:
-			break;
-		}
-	}
+	for( p = str; *p; p++ ) 
+		if( *p < 32 &&
+			*p != '\n' &&
+			*p != '\t' &&
+			*p != '\r' )
+			/* You'd think we could output "&#x02%x;", but xml
+			 * 1.0 parsers barf on that. xml 1.1 allows this, but
+			 * there are almost no parsers. 
+			 *
+			 * U+2400 onwards are unicode glyphs for the ASCII 
+			 * control characters, so we can use them -- thanks
+			 * electroly.
+			 */
+			vips_dbuf_writef( dbuf, "&#x%04x;", 0x2400 + *p ); 
+		else if( *p == '<' )
+			vips_dbuf_write( dbuf, (guchar *) "&lt;", 4 );
+		else if( *p == '>' )
+			vips_dbuf_write( dbuf, (guchar *) "&gt;", 4 );
+		else if( *p == '&' )
+			vips_dbuf_write( dbuf, (guchar *) "&amp;", 5 );
+		else 
+			vips_dbuf_write( dbuf, (guchar *) p, 1 );
 }
 
 static void *

@@ -10,6 +10,8 @@
  * 	- use a much larger strip size, thanks bubba
  * 8/6/18
  * 	- add background param
+ * 16/8/18
+ * 	- shut down the input file as soon as we can [kleisauke]
  */
 
 /*
@@ -117,12 +119,18 @@ G_DEFINE_ABSTRACT_TYPE( VipsForeignLoadPdf, vips_foreign_load_pdf,
 	VIPS_TYPE_FOREIGN_LOAD );
 
 static void
+vips_foreign_load_pdf_close( VipsForeignLoadPdf *pdf )
+{
+	VIPS_UNREF( pdf->page );
+	VIPS_UNREF( pdf->doc );
+}
+
+static void
 vips_foreign_load_pdf_dispose( GObject *gobject )
 {
 	VipsForeignLoadPdf *pdf = (VipsForeignLoadPdf *) gobject;
 
-	VIPS_UNREF( pdf->page );
-	VIPS_UNREF( pdf->doc );
+	vips_foreign_load_pdf_close( pdf ); 
 
 	G_OBJECT_CLASS( vips_foreign_load_pdf_parent_class )->
 		dispose( gobject );
@@ -299,12 +307,11 @@ vips_foreign_load_pdf_header( VipsForeignLoad *load )
 		top += pdf->pages[i].height;
 	}
 
-	/* If all pages are the same size, we can tag this as a toilet roll
-	 * image and tiffsave will be able to save it as a multipage tiff.
+	/* If all pages are the same height, we can tag this as a toilet roll
+	 * image.
 	 */
 	for( i = 1; i < pdf->n; i++ ) 
-		if( pdf->pages[i].width != pdf->pages[0].width ||
-			pdf->pages[i].height != pdf->pages[0].height )
+		if( pdf->pages[i].height != pdf->pages[0].height )
 			break;
 	if( i == pdf->n ) 
 		vips_image_set_int( load->out, 
@@ -328,6 +335,7 @@ vips_foreign_load_pdf_generate( VipsRegion *or,
 	void *seq, void *a, void *b, gboolean *stop )
 {
 	VipsForeignLoadPdf *pdf = (VipsForeignLoadPdf *) a;
+	VipsForeignLoad *load = (VipsForeignLoad *) pdf;
 	VipsRect *r = &or->valid;
 
 	int top;
@@ -386,11 +394,18 @@ vips_foreign_load_pdf_generate( VipsRegion *or,
 		i += 1;
 	}
 
+	/* In seq mode, we can shut down the input when we render the last
+	 * row.
+	 */
+	if( top >= or->im->Ysize &&
+		load->access == VIPS_ACCESS_SEQUENTIAL )
+		vips_foreign_load_pdf_close( pdf ); 
+
 	/* Cairo makes pre-multipled BRGA, we must byteswap and unpremultiply.
 	 */
 	for( y = 0; y < r->height; y++ ) 
 		vips__cairo2rgba( 
-			(guint32 *) VIPS_REGION_ADDR( or, r->left, r->top + y ), 
+			(guint32 *) VIPS_REGION_ADDR( or, r->left, r->top + y ),
 			r->width ); 
 
 	return( 0 ); 
@@ -451,35 +466,35 @@ vips_foreign_load_pdf_class_init( VipsForeignLoadPdfClass *class )
 	load_class->get_flags = vips_foreign_load_pdf_get_flags;
 	load_class->load = vips_foreign_load_pdf_load;
 
-	VIPS_ARG_INT( class, "page", 10,
+	VIPS_ARG_INT( class, "page", 20,
 		_( "Page" ),
 		_( "Load this page from the file" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadPdf, page_no ),
 		0, 100000, 0 );
 
-	VIPS_ARG_INT( class, "n", 11,
+	VIPS_ARG_INT( class, "n", 21,
 		_( "n" ),
 		_( "Load this many pages" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadPdf, n ),
 		-1, 100000, 1 );
 
-	VIPS_ARG_DOUBLE( class, "dpi", 12,
+	VIPS_ARG_DOUBLE( class, "dpi", 22,
 		_( "DPI" ),
 		_( "Render at this DPI" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadPdf, dpi ),
 		0.001, 100000.0, 72.0 );
 
-	VIPS_ARG_DOUBLE( class, "scale", 13,
+	VIPS_ARG_DOUBLE( class, "scale", 23,
 		_( "Scale" ),
 		_( "Scale output by this factor" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadPdf, scale ),
 		0.001, 100000.0, 1.0 );
 
-	VIPS_ARG_BOXED( class, "background", 14, 
+	VIPS_ARG_BOXED( class, "background", 24, 
 		_( "Background" ), 
 		_( "Background value" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
@@ -763,8 +778,8 @@ vips_pdfload( const char *filename, VipsImage **out, ... )
  * * @scale: %gdouble, scale render by this factor
  * * @background: #VipsArrayDouble background colour
  *
- * Read a PDF-formatted memory block into a VIPS image. Exactly as
- * vips_pdfload(), but read from a memory buffer. 
+ * Read a PDF-formatted memory buffer into a VIPS image. Exactly as
+ * vips_pdfload(), but read from memory. 
  *
  * You must not free the buffer while @out is active. The 
  * #VipsObject::postclose signal on @out is a good place to free. 

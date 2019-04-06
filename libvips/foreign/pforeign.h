@@ -35,6 +35,16 @@
 extern "C" {
 #endif /*__cplusplus*/
 
+/* Slow and horrid version if there's no recent glib.
+ */
+#ifndef HAVE_CHECKED_MUL
+#define g_uint_checked_mul( dest, a, b ) ( \
+	((guint64) a * b) > UINT_MAX ? \
+		(*dest = UINT_MAX, FALSE) : \
+		(*dest = a * b, TRUE) \
+)
+#endif /*HAVE_CHECKED_MUL*/
+
 void vips__tiff_init( void );
 
 int vips__tiff_write( VipsImage *in, const char *filename, 
@@ -125,18 +135,14 @@ int vips__fits_read( const char *filename, VipsImage *out );
 int vips__fits_write( VipsImage *in, const char *filename );
 
 int vips__magick_read( const char *filename, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n );
+	VipsImage *out, const char *density, int page, int n );
 int vips__magick_read_header( const char *filename, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n );
+	VipsImage *out, const char *density, int page, int n );
 
 int vips__magick_read_buffer( const void *buf, const size_t len,
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n );
+	VipsImage *out, const char *density, int page, int n );
 int vips__magick_read_buffer_header( const void *buf, const size_t len,
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n );
+	VipsImage *out, const char *density, int page, int n );
 
 extern const char *vips__mat_suffs[];
 
@@ -209,10 +215,7 @@ int vips__png_write_buf( VipsImage *in,
 typedef struct _VipsWebPNames {
 	const char *vips;
 	const char *webp;
-
-	/* The webp flag bit for this chunk of metadata 
-	 */
-	int flag;
+	int flags;
 } VipsWebPNames;
 
 extern const VipsWebPNames vips__webp_names[];
@@ -222,23 +225,27 @@ extern const char *vips__webp_suffs[];
 int vips__iswebp_buffer( const void *buf, size_t len );
 int vips__iswebp( const char *filename );
 
-int vips__webp_read_file_header( const char *name, VipsImage *out, int shrink );
-int vips__webp_read_file( const char *name, VipsImage *out, int shrink ); 
+int vips__webp_read_file_header( const char *name, VipsImage *out, 
+	int page, int n, int shrink ); 
+int vips__webp_read_file( const char *name, VipsImage *out, 
+	int page, int n, int shrink ); 
 
-int vips__webp_read_buffer_header( const void *buf, size_t len, 
-	VipsImage *out, int shrink ); 
-int vips__webp_read_buffer( const void *buf, size_t len, 
-	VipsImage *out, int shrink ); 
+int vips__webp_read_buffer_header( const void *buf, size_t len, VipsImage *out,
+	int page, int n, int shrink ); 
+int vips__webp_read_buffer( const void *buf, size_t len, VipsImage *out, 
+	int page, int n, int shrink ); 
 
 int vips__webp_write_file( VipsImage *out, const char *filename, 
 	int Q, gboolean lossless, VipsForeignWebpPreset preset,
 	gboolean smart_subsample, gboolean near_lossless,
-	int alpha_q,
+	int alpha_q, int reduction_effort,
+	gboolean min_size, int kmin, int kmax,
 	gboolean strip );
 int vips__webp_write_buffer( VipsImage *out, void **buf, size_t *len, 
 	int Q, gboolean lossless, VipsForeignWebpPreset preset,
 	gboolean smart_subsample, gboolean near_lossless,
-	int alpha_q,
+	int alpha_q, int reduction_effort,
+	gboolean min_size, int kmin, int kmax,
 	gboolean strip );
 
 int vips__openslide_isslide( const char *filename );
@@ -255,6 +262,19 @@ gboolean vips_foreign_load_pdf_is_a( const char *filename );
 int vips__quantise_image( VipsImage *in, 
 	VipsImage **index_out, VipsImage **palette_out,
 	int colours, int Q, double dither );
+
+extern const char *vips__nifti_suffs[];
+
+VipsBandFormat vips__foreign_nifti_datatype2BandFmt( int datatype );
+int vips__foreign_nifti_BandFmt2datatype( VipsBandFormat fmt );
+
+typedef void *(*VipsNiftiMapFn)( const char *name, GValue *value, glong offset, 
+	void *a, void *b );
+void *vips__foreign_nifti_map( VipsNiftiMapFn fn, void *a, void *b );
+
+extern const char *vips__heif_suffs[];
+struct heif_error;
+void vips__heif_error( struct heif_error *error );
 
 #ifdef __cplusplus
 }

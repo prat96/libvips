@@ -1,17 +1,18 @@
 # vim: set fileencoding=utf-8 :
-import gc
+
+import sys
 import os
 import shutil
 import tempfile
 import pytest
 
 import pyvips
-from helpers import JPEG_FILE, SRGB_FILE, \
-    MATLAB_FILE, PNG_FILE, TIF_FILE, OME_FILE, ANALYZE_FILE, \
-    GIF_FILE, WEBP_FILE, EXR_FILE, FITS_FILE, OPENSLIDE_FILE, \
-    PDF_FILE, SVG_FILE, SVGZ_FILE, SVG_GZ_FILE, GIF_ANIM_FILE, \
-    DICOM_FILE, BMP_FILE, temp_filename, assert_almost_equal_objects, have, \
-    skip_if_no
+from helpers import \
+    JPEG_FILE, SRGB_FILE, MATLAB_FILE, PNG_FILE, TIF_FILE, OME_FILE, \
+    ANALYZE_FILE, GIF_FILE, WEBP_FILE, EXR_FILE, FITS_FILE, OPENSLIDE_FILE, \
+    PDF_FILE, SVG_FILE, SVGZ_FILE, SVG_GZ_FILE, GIF_ANIM_FILE, DICOM_FILE, \
+    BMP_FILE, NIFTI_FILE, ICO_FILE, HEIC_FILE, \
+    temp_filename, assert_almost_equal_objects, have, skip_if_no
 
 
 class TestForeign:
@@ -203,7 +204,7 @@ class TestForeign:
             x = pyvips.Image.new_from_file(JPEG_FILE)
             x = x.copy()
 
-            x.set_type(pyvips.GValue.gstr_type, "exif-ifd0-XPComment", "йцук")
+            x.set_type(pyvips.GValue.gstr_type, "exif-ifd0-XPComment", u"йцук")
 
             filename = temp_filename(self.tempdir, '.jpg')
             x.write_to_file(filename)
@@ -212,7 +213,7 @@ class TestForeign:
             y = x.get("exif-ifd0-XPComment")
             # can't use == since the string will have an extra " (xx, yy, zz)" 
             # format area at the end
-            assert y.startswith("йцук")
+            assert y.startswith(u"йцук")
 
             # can set/save/load UserComment, a tag which has the
             # encoding in the first 8 bytes ... though libexif only supports
@@ -385,9 +386,10 @@ class TestForeign:
         self.file_loader("magickload", BMP_FILE, bmp_valid)
         self.buffer_loader("magickload_buffer", BMP_FILE, bmp_valid)
 
-        # we should have rgba for svg files
+        # we should have rgb or rgba for svg files ... different versions of
+        # IM handle this differently
         im = pyvips.Image.magickload(SVG_FILE)
-        assert im.bands == 4
+        assert im.bands == 3 or im.bands == 4
 
         # density should change size of generated svg
         im = pyvips.Image.magickload(SVG_FILE, density='100')
@@ -427,12 +429,34 @@ class TestForeign:
         # some IMs are 3 bands, some are 1, can't really test
         # assert im.bands == 1
 
-        # added in 8.7
-        if have("magicksave"):
-            self.save_load_file(".bmp", "", self.colour, 0)
-            self.save_load_buffer("magicksave_buffer", "magickload_buffer",
-                                  self.colour, 0, format="BMP")
-            self.save_load("%s.bmp", self.colour)
+        # libvips has its own sniffer for ICO, test that
+        with open(ICO_FILE, 'rb') as f:
+            buf = f.read()
+
+        im = pyvips.Image.new_from_buffer(buf, "")
+        assert im.width == 16
+        assert im.height == 16
+
+    # added in 8.7
+    @skip_if_no("magicksave")
+    def test_magicksave(self):
+        # save to a file and load again ... we can't use save_load_file since
+        # we want to make sure we use magickload/save 
+        # don't use BMP - GraphicsMagick always adds an alpha
+        # don't use TIF - IM7 will save as 16-bit
+        filename = temp_filename(self.tempdir, ".jpg")
+
+        self.colour.magicksave(filename)
+        x = pyvips.Image.magickload(filename)
+
+        assert self.colour.width == x.width
+        assert self.colour.height == x.height
+        assert self.colour.bands == x.bands
+        max_diff = (self.colour - x).abs().max()
+        assert max_diff < 40
+
+        self.save_load_buffer("magicksave_buffer", "magickload_buffer",
+                              self.colour, 40, format="JPG")
 
     @skip_if_no("webpload")
     def test_webp(self):
@@ -484,6 +508,18 @@ class TestForeign:
                 y = pyvips.Image.new_from_buffer(buf, "")
                 assert y.get("orientation") == 6
 
+        # try converting an animated gif to webp ... can't do back to gif
+        # again without IM support
+        if have("gifload"):
+            x1 = pyvips.Image.new_from_file(GIF_ANIM_FILE, n=-1)
+            w1 = x1.webpsave_buffer(Q=10)
+            x2 = pyvips.Image.new_from_buffer(w1, "", n=-1)
+            assert x1.width == x2.width
+            assert x1.height == x2.height
+            assert x1.get("gif-delay") == x2.get("gif-delay")
+            assert x1.get("page-height") == x2.get("page-height")
+            assert x1.get("gif-loop") == x2.get("gif-loop")
+
     @skip_if_no("analyzeload")
     def test_analyzeload(self):
         def analyze_valid(im):
@@ -510,8 +546,8 @@ class TestForeign:
     def test_openexrload(self):
         def exr_valid(im):
             a = im(10, 10)
-            assert_almost_equal_objects(a, [0.124512, 0.159668,
-                                            0.040375, 1.0],
+            assert_almost_equal_objects(a, [0.124512, 0.159668, 0.040375, 
+                                            255.0],
                                         threshold=0.00001)
             assert im.width == 610
             assert im.height == 406
@@ -531,6 +567,18 @@ class TestForeign:
 
         self.file_loader("fitsload", FITS_FILE, fits_valid)
         self.save_load("%s.fits", self.mono)
+
+    @skip_if_no("niftiload")
+    def test_niftiload(self):
+        def nifti_valid(im):
+            a = im(30, 26)
+            assert_almost_equal_objects(a, [131])
+            assert im.width == 91
+            assert im.height == 9919
+            assert im.bands == 1
+
+        self.file_loader("niftiload", NIFTI_FILE, nifti_valid)
+        self.save_load("%s.nii.gz", self.mono)
 
     @skip_if_no("openslideload")
     def test_openslideload(self):
@@ -782,6 +830,59 @@ class TestForeign:
         buf = self.colour.dzsave_buffer(region_shrink="mean")
         buf = self.colour.dzsave_buffer(region_shrink="mode")
         buf = self.colour.dzsave_buffer(region_shrink="median")
+
+    @skip_if_no("heifload")
+    def test_heifload(self):
+        def heif_valid(im):
+            a = im(10, 10)
+            assert_almost_equal_objects(a, [75.0, 86.0, 81.0])
+            assert im.width == 4032
+            assert im.height == 3024
+            assert im.bands == 3
+
+        self.file_loader("heifload", HEIC_FILE, heif_valid)
+        self.buffer_loader("heifload_buffer", HEIC_FILE, heif_valid)
+        self.save_load_buffer("heifsave_buffer", "heifload_buffer",
+                              self.colour, 80)
+        self.save_load("%s.heic", self.colour)
+
+        # test lossless mode
+        im = pyvips.Image.new_from_file(HEIC_FILE)
+        buf = im.heifsave_buffer(lossless=True)
+        im2 = pyvips.Image.new_from_buffer(buf, "")
+        # not in fact quite lossless
+        assert abs(im.avg() - im2.avg()) < 3
+
+        # higher Q should mean a bigger buffer
+        b1 = im.heifsave_buffer(Q=10)
+        b2 = im.heifsave_buffer(Q=90)
+        assert len(b2) > len(b1)
+
+        # try saving an image with an ICC profile and reading it back 
+        # not all libheif have profile support, so put it in an if
+        buf = self.colour.heifsave_buffer()
+        im = pyvips.Image.new_from_buffer(buf, "")
+        p1 = self.colour.get("icc-profile-data")
+        if im.get_typeof("icc-profile-data") != 0:
+            p2 = im.get("icc-profile-data")
+            assert p1 == p2
+
+        # add tests for exif, xmp, ipct
+        # the exif test will need us to be able to walk the header,
+        # we can't just check exif-data
+
+        # libheif 1.1 (on ubuntu 18.04, current LTS) does not support exif
+        # write, so this test is commented out
+
+        # test that exif changes change the output of heifsave
+        # first make sure we have exif support
+        #z = pyvips.Image.new_from_file(JPEG_FILE)
+        #if z.get_typeof("exif-ifd0-Orientation") != 0:
+        #    x = self.colour.copy()
+        #    x.set("exif-ifd0-Make", "banana")
+        #    buf = x.heifsave_buffer()
+        #    y = pyvips.Image.new_from_buffer(buf, "")
+        #    assert y.get("exif-ifd0-Make").split(" ")[0] == "banana"
 
 if __name__ == '__main__':
     pytest.main()

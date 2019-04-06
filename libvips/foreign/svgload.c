@@ -266,7 +266,8 @@ vips_foreign_load_svg_parse( VipsForeignLoadSvg *svg, VipsImage *out )
 		rsvg_handle_set_dpi( svg->page, svg->dpi * svg->scale );
 		rsvg_handle_get_dimensions( svg->page, &dimensions );
 
-		if( width == dimensions.width && height == dimensions.height ) {
+		if( width == dimensions.width && 
+			height == dimensions.height ) {
 			/* SVG without width and height always reports the same 
 			 * dimensions regardless of dpi. Apply dpi/scale using 
 			 * cairo instead.
@@ -348,11 +349,11 @@ vips_foreign_load_svg_generate( VipsRegion *or,
 
 	cairo_destroy( cr );
 
-	/* Cairo makes pre-multipled BRGA, we must byteswap and unpremultiply.
+	/* Cairo makes pre-multipled BRGA -- we must byteswap and unpremultiply.
 	 */
 	for( y = 0; y < r->height; y++ ) 
 		vips__cairo2rgba( 
-			(guint32 *) VIPS_REGION_ADDR( or, r->left, r->top + y ), 
+			(guint32 *) VIPS_REGION_ADDR( or, r->left, r->top + y ),
 			r->width ); 
 
 	return( 0 ); 
@@ -425,14 +426,14 @@ vips_foreign_load_svg_class_init( VipsForeignLoadSvgClass *class )
 	load_class->get_flags = vips_foreign_load_svg_get_flags;
 	load_class->load = vips_foreign_load_svg_load;
 
-	VIPS_ARG_DOUBLE( class, "dpi", 11,
+	VIPS_ARG_DOUBLE( class, "dpi", 21,
 		_( "DPI" ),
 		_( "Render at this DPI" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadSvg, dpi ),
 		0.001, 100000.0, 72.0 );
 
-	VIPS_ARG_DOUBLE( class, "scale", 12,
+	VIPS_ARG_DOUBLE( class, "scale", 22,
 		_( "Scale" ),
 		_( "Scale output by this factor" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,

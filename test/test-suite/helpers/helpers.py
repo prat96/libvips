@@ -27,6 +27,9 @@ SVG_GZ_FILE = os.path.join(IMAGES, "vips-profile.svg.gz")
 GIF_ANIM_FILE = os.path.join(IMAGES, "cogs.gif")
 DICOM_FILE = os.path.join(IMAGES, "dicom_test_image.dcm")
 BMP_FILE = os.path.join(IMAGES, "MARBLES.BMP")
+NIFTI_FILE = os.path.join(IMAGES, "avg152T1_LR_nifti.nii.gz")
+ICO_FILE = os.path.join(IMAGES, "favicon.ico")
+HEIC_FILE = os.path.join(IMAGES, "Example1.heic")
 
 unsigned_formats = [pyvips.BandFormat.UCHAR,
                     pyvips.BandFormat.USHORT,
@@ -51,12 +54,14 @@ colour_colourspaces = [pyvips.Interpretation.XYZ,
                        pyvips.Interpretation.HSV,
                        pyvips.Interpretation.SRGB,
                        pyvips.Interpretation.YXY]
+cmyk_colourspaces = [pyvips.Interpretation.CMYK]
 coded_colourspaces = [pyvips.Interpretation.LABQ]
 mono_colourspaces = [pyvips.Interpretation.B_W]
 sixteenbit_colourspaces = [pyvips.Interpretation.GREY16,
                            pyvips.Interpretation.RGB16]
 all_colourspaces = colour_colourspaces + mono_colourspaces + \
-                   coded_colourspaces + sixteenbit_colourspaces
+                   coded_colourspaces + sixteenbit_colourspaces + \
+                   cmyk_colourspaces
 
 max_value = {pyvips.BandFormat.UCHAR: 0xff,
              pyvips.BandFormat.USHORT: 0xffff,

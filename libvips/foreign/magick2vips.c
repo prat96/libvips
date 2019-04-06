@@ -55,10 +55,15 @@
  * 	- remove @all_frames, add @n
  * 23/2/17
  * 	- try using GetImageChannelDepth() instead of ->depth
- * 24/4/18
- * 	- add format hint
  * 25/5/18
  * 	- don't use Ping, it's too unreliable
+ * 24/7/18
+ * 	- sniff extra filetypes
+ * 4/1/19 kleisauke
+ * 	- we did not chain exceptions correctly, causing a memory leak
+ * 	- added wrapper funcs for exception handling
+ * 4/2/19
+ * 	- add profile (xmp, ipct, etc.) read
  */
 
 /*
@@ -107,6 +112,7 @@
 #include <sys/types.h>
 
 #include <vips/vips.h>
+#include <vips/internal.h>
 
 #include <magick/api.h>
 
@@ -130,12 +136,14 @@
 typedef struct _Read {
 	char *filename;
 	VipsImage *im;
+	const void *buf;
+	size_t len; 
 	int page;
 	int n;
 
 	Image *image;
 	ImageInfo *image_info;
-	ExceptionInfo exception;
+	ExceptionInfo *exception;
 
 	/* Number of pages in image.
 	 */
@@ -166,9 +174,7 @@ read_free( Read *read )
 	VIPS_FREEF( DestroyImageList, read->image );
 	VIPS_FREEF( DestroyImageInfo, read->image_info ); 
 	VIPS_FREE( read->frames );
-	if ( (&read->exception)->signature == MagickSignature ) {
-		DestroyExceptionInfo( &read->exception );
-	}
+	VIPS_FREEF( magick_destroy_exception, read->exception ); 
 	VIPS_FREEF( vips_g_mutex_free, read->lock );
 }
 
@@ -184,7 +190,8 @@ read_close( VipsImage *im, Read *read )
 
 static Read *
 read_new( const char *filename, VipsImage *im, 
-	const char *format, const char *density, int page, int n )
+	const void *buf, const size_t len, 
+	const char *density, int page, int n ) 
 {
 	Read *read;
 
@@ -199,12 +206,14 @@ read_new( const char *filename, VipsImage *im,
 	if( !(read = VIPS_NEW( im, Read )) )
 		return( NULL );
 	read->filename = filename ? g_strdup( filename ) : NULL;
+	read->buf = buf;
+	read->len = len;
 	read->page = page;
 	read->n = n;
 	read->im = im;
 	read->image = NULL;
 	read->image_info = CloneImageInfo( NULL );
-	GetExceptionInfo( &read->exception );
+	read->exception = magick_acquire_exception(); 
 	read->n_pages = 0;
 	read->n_frames = 0;
 	read->frames = NULL;
@@ -220,11 +229,12 @@ read_new( const char *filename, VipsImage *im,
 		vips_strncpy( read->image_info->filename, 
 			filename, MaxTextExtent );
 
-	/* The file format hint, eg. "ICO".
+	/* Any extra file format detection.
 	 */
-	if( format ) 
-		vips_strncpy( read->image_info->magick, 
-			format, MaxTextExtent );
+	if( filename ) 
+		magick_sniff_file( read->image_info, filename );
+	if( buf ) 
+		magick_sniff_bytes( read->image_info, buf, len );
 
 	/* Canvas resolution for rendering vector formats like SVG.
 	 */
@@ -414,8 +424,10 @@ parse_header( Read *read )
 
 	vips_image_pipelinev( im, VIPS_DEMAND_STYLE_SMALLTILE, NULL );
 
-	/* Three ways to loop over attributes / properties :-(
+	/* Set vips metadata from ImageMagick profiles.
 	 */
+	if( magick_set_vips_profile( im, image ) )
+		return( -1 );
 
 #ifdef HAVE_RESETIMAGEPROPERTYITERATOR
 {
@@ -744,8 +756,7 @@ magick_fill_region( VipsRegion *out,
 
 int
 vips__magick_read( const char *filename, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n )
+	VipsImage *out, const char *density, int page, int n )
 {
 	Read *read;
 
@@ -753,16 +764,16 @@ vips__magick_read( const char *filename,
 	printf( "magick2vips: vips__magick_read: %s\n", filename );
 #endif /*DEBUG*/
 
-	if( !(read = read_new( filename, out, format, density, page, n )) )
+	if( !(read = read_new( filename, out, NULL, n, density, page, n )) )
 		return( -1 );
 
 #ifdef DEBUG
 	printf( "magick2vips: calling ReadImage() ...\n" );
 #endif /*DEBUG*/
 
-	read->image = ReadImage( read->image_info, &read->exception );
+	read->image = ReadImage( read->image_info, read->exception );
 	if( !read->image ) {
-		magick_vips_error( "magick2vips", &read->exception );
+		magick_vips_error( "magick2vips", read->exception );
 		vips_error( "magick2vips", 
 			_( "unable to read file \"%s\"" ), filename );
 		return( -1 );
@@ -779,8 +790,7 @@ vips__magick_read( const char *filename,
 
 int
 vips__magick_read_header( const char *filename, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n )
+	VipsImage *out, const char *density, int page, int n )
 {
 	Read *read;
 
@@ -788,7 +798,7 @@ vips__magick_read_header( const char *filename,
 	printf( "vips__magick_read_header: %s\n", filename );
 #endif /*DEBUG*/
 
-	if( !(read = read_new( filename, out, format, density, page, n )) )
+	if( !(read = read_new( filename, out, NULL, 0, density, page, n )) )
 		return( -1 );
 
 #ifdef DEBUG
@@ -799,9 +809,9 @@ vips__magick_read_header( const char *filename,
 	 * but sadly many IM coders do not support ping. The critical one for
 	 * us is DICOM. TGA also has issues. 
 	 */
-	read->image = ReadImage( read->image_info, &read->exception );
+	read->image = ReadImage( read->image_info, read->exception );
 	if( !read->image ) {
-		magick_vips_error( "magick2vips", &read->exception );
+		magick_vips_error( "magick2vips", read->exception );
 		vips_error( "magick2vips", 
 			_( "unable to read file \"%s\"" ), filename ); 
 		return( -1 );
@@ -825,8 +835,7 @@ vips__magick_read_header( const char *filename,
 
 int
 vips__magick_read_buffer( const void *buf, const size_t len, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n )
+	VipsImage *out, const char *density, int page, int n )
 {
 	Read *read;
 
@@ -834,7 +843,7 @@ vips__magick_read_buffer( const void *buf, const size_t len,
 	printf( "magick2vips: vips__magick_read_buffer: %p %zu\n", buf, len );
 #endif /*DEBUG*/
 
-	if( !(read = read_new( NULL, out, format, density, page, n )) )
+	if( !(read = read_new( NULL, out, buf, len, density, page, n )) )
 		return( -1 );
 
 #ifdef DEBUG
@@ -842,9 +851,9 @@ vips__magick_read_buffer( const void *buf, const size_t len,
 #endif /*DEBUG*/
 
 	read->image = BlobToImage( read->image_info, 
-		buf, len, &read->exception );
+		buf, len, read->exception );
 	if( !read->image ) {
-		magick_vips_error( "magick2vips", &read->exception );
+		magick_vips_error( "magick2vips", read->exception );
 		vips_error( "magick2vips", "%s", _( "unable to read buffer" ) );
 		return( -1 );
 	}
@@ -860,8 +869,7 @@ vips__magick_read_buffer( const void *buf, const size_t len,
 
 int
 vips__magick_read_buffer_header( const void *buf, const size_t len, 
-	VipsImage *out, const char *format, const char *density, 
-	int page, int n )
+	VipsImage *out, const char *density, int page, int n )
 {
 	Read *read;
 
@@ -869,7 +877,7 @@ vips__magick_read_buffer_header( const void *buf, const size_t len,
 	printf( "vips__magick_read_buffer_header: %p %zu\n", buf, len );
 #endif /*DEBUG*/
 
-	if( !(read = read_new( NULL, out, format, density, page, n )) )
+	if( !(read = read_new( NULL, out, buf, len, density, page, n )) )
 		return( -1 );
 
 #ifdef DEBUG
@@ -881,9 +889,9 @@ vips__magick_read_buffer_header( const void *buf, const size_t len,
 	 * for us is DICOM. TGA also has issues. 
 	 */
 	read->image = BlobToImage( read->image_info, 
-		buf, len, &read->exception );
+		buf, len, read->exception );
 	if( !read->image ) {
-		magick_vips_error( "magick2vips", &read->exception );
+		magick_vips_error( "magick2vips", read->exception );
 		vips_error( "magick2vips", "%s", _( "unable to ping blob" ) );
 		return( -1 );
 	}

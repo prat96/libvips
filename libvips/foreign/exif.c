@@ -158,7 +158,7 @@ show_values( ExifData *data )
  * their default value and we won't know about it. 
  */
 static ExifData *
-vips_exif_load_data_without_fix( void *data, int length )
+vips_exif_load_data_without_fix( const void *data, int length )
 {
 	ExifData *ed;
 
@@ -447,22 +447,6 @@ vips_image_resolution_from_exif( VipsImage *image, ExifData *ed )
 	return( 0 );
 }
 
-static int
-vips_exif_get_thumbnail( VipsImage *im, ExifData *ed )
-{
-	if( ed->size > 0 ) {
-		char *thumb_copy;
-
-		thumb_copy = g_malloc( ed->size );      
-		memcpy( thumb_copy, ed->data, ed->size );
-
-		vips_image_set_blob( im, "jpeg-thumbnail-data", 
-			(VipsCallbackFn) g_free, thumb_copy, ed->size );
-	}
-
-	return( 0 );
-}
-
 /* Need to fwd ref this.
  */
 static int
@@ -474,17 +458,17 @@ vips_exif_resolution_from_image( ExifData *ed, VipsImage *image );
 int
 vips__exif_parse( VipsImage *image )
 {
-	void *data;
-	size_t length;
+	const void *data;
+	size_t size;
 	ExifData *ed;
 	VipsExifParams params;
 	const char *str;
 
 	if( !vips_image_get_typeof( image, VIPS_META_EXIF_NAME ) )
 		return( 0 );
-	if( vips_image_get_blob( image, VIPS_META_EXIF_NAME, &data, &length ) )
+	if( vips_image_get_blob( image, VIPS_META_EXIF_NAME, &data, &size ) )
 		return( -1 ); 
-	if( !(ed = vips_exif_load_data_without_fix( data, length )) )
+	if( !(ed = vips_exif_load_data_without_fix( data, size )) )
 		return( -1 );
 
 #ifdef DEBUG_VERBOSE
@@ -516,7 +500,9 @@ vips__exif_parse( VipsImage *image )
 	exif_data_foreach_content( ed, 
 		(ExifDataForeachContentFunc) vips_exif_get_content, &params );
 
-	vips_exif_get_thumbnail( image, ed );
+	vips_image_set_blob_copy( image, 
+		"jpeg-thumbnail-data", ed->data, ed->size );
+
 	exif_data_free( ed );
 
 	/* Orientation handling. ifd0 has the Orientation tag for the main
@@ -811,8 +797,8 @@ drop_tail( const char *data )
 
 	p = str + strlen( str );
 	if( p > str &&
-		*(p = g_utf8_prev_char( p )) == ')' &&
-		(p = g_utf8_strrchr( p, -1, (gunichar) '(')) &&
+		*g_utf8_prev_char( p ) == ')' &&
+		(p = g_utf8_strrchr( str, -1, (gunichar) '(')) &&
 		p > str &&
 		*(p = g_utf8_prev_char( p )) == ' ' )
 		*p = '\0';
@@ -832,24 +818,30 @@ vips_exif_set_string_encoding( ExifData *ed,
 	ExifEntry *entry, unsigned long component, const char *data )
 {
 	char *str;
-	char *ascii;
 	int len;
 
 	str = drop_tail( data );
 
 	/* libexif can only really save ASCII to things like UserComment.
 	 */
+#ifdef HAVE_G_STR_TO_ASCII
+{
+	char *ascii;
+
 	ascii = g_str_to_ascii( str, NULL );
+	g_free( str );
+	str = ascii;
+}
+#endif /*HAVE_G_STR_TO_ASCII*/
 
 	/* libexif comment strings are not NULL-terminated, and have an 
 	 * encoding tag (always ASCII) in the first 8 bytes.
 	 */
-	len = strlen( ascii );
+	len = strlen( str );
 	vips_exif_alloc_string( entry, sizeof( ASCII_COMMENT ) - 1 + len );
 	memcpy( entry->data, ASCII_COMMENT, sizeof( ASCII_COMMENT ) - 1 );
-        memcpy( entry->data + sizeof( ASCII_COMMENT ) - 1, ascii, len );
+        memcpy( entry->data + sizeof( ASCII_COMMENT ) - 1, str, len );
 
-	g_free( ascii ); 
 	g_free( str );
 }
 
@@ -861,20 +853,29 @@ vips_exif_set_string_ascii( ExifData *ed,
 	ExifEntry *entry, unsigned long component, const char *data )
 {
 	char *str;
-	char *ascii;
 	int len;
 
 	str = drop_tail( data );
+
+	/* libexif can only really save ASCII to things like UserComment.
+	 */
+#ifdef HAVE_G_STR_TO_ASCII
+{
+	char *ascii;
+
 	ascii = g_str_to_ascii( str, NULL );
+	g_free( str );
+	str = ascii;
+}
+#endif /*HAVE_G_STR_TO_ASCII*/
 
 	/* ASCII strings are NULL-terminated.
 	 */
-	len = strlen( ascii );
+	len = strlen( str );
 	vips_exif_alloc_string( entry, len + 1 );
-        memcpy( entry->data, ascii, len + 1 );
+        memcpy( entry->data, str, len + 1 );
         entry->format = EXIF_FORMAT_ASCII;
 
-	g_free( ascii ); 
 	g_free( str );
 }
 
@@ -1054,21 +1055,21 @@ vips_exif_set_thumbnail( ExifData *ed, VipsImage *im )
 	/* Update EXIF thumbnail from metadata, if any. 
 	 */
 	if( vips_image_get_typeof( im, "jpeg-thumbnail-data" ) ) { 
-		void *data;
-		size_t length;
+		const void *data;
+		size_t size;
 
 		if( vips_image_get_blob( im, "jpeg-thumbnail-data", 
-			&data, &length ) ) 
+			&data, &size ) ) 
 			return( -1 );
 
 		/* Again, we should use the exif allocator attached to this
 		 * entry, but it is not exposed!
 		 */
-		if( length > 0 && 
+		if( size > 0 && 
 			data ) { 
-			ed->data = malloc( length );
-			memcpy( ed->data, data, length );
-			ed->size = length;
+			ed->data = malloc( size );
+			memcpy( ed->data, data, size );
+			ed->size = size;
 		}
 	}
 

@@ -133,14 +133,14 @@ vips_foreign_load_jpeg_class_init( VipsForeignLoadJpegClass *class )
 
 	load_class->get_flags = vips_foreign_load_jpeg_get_flags;
 
-	VIPS_ARG_INT( class, "shrink", 10, 
+	VIPS_ARG_INT( class, "shrink", 20, 
 		_( "Shrink" ), 
 		_( "Shrink factor on load" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadJpeg, shrink ),
 		1, 16, 1 );
 
-	VIPS_ARG_BOOL( class, "autorotate", 12, 
+	VIPS_ARG_BOOL( class, "autorotate", 21, 
 		_( "Autorotate" ), 
 		_( "Rotate image using exif orientation" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
@@ -327,8 +327,7 @@ vips_foreign_load_jpeg_buffer_init( VipsForeignLoadJpegBuffer *buffer )
  *
  * * @shrink: %gint, shrink by this much on load
  * * @fail: %gboolean, fail on errors
- * * @autorotate: %gboolean, use exif Orientation tag to rotate the image 
- *   during load
+ * * @autorotate: %gboolean, rotate image upright during load 
  *
  * Read a JPEG file into a VIPS image. It can read most 8-bit JPEG images, 
  * including CMYK and YCbCr.

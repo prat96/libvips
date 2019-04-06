@@ -98,6 +98,8 @@
  * 	- set interlaced=1 for interlaced images
  * 10/4/18
  * 	- strict round down on shrink-on-load
+ * 16/8/18
+ * 	- shut down the input file as soon as we can [kleisauke]
  */
 
 /*
@@ -188,15 +190,30 @@ typedef struct _ReadJpeg {
 	int output_height;
 } ReadJpeg;
 
+/* This can be called many times. It's called directly at the end of image
+ * read.
+ */
+static void
+readjpeg_close_input( ReadJpeg *jpeg )
+{
+	VIPS_FREEF( fclose, jpeg->eman.fp );
+
+	/* Don't call jpeg_finish_decompress(). It just checks the tail of the
+	 * file and who cares about that. All mem is freed in
+	 * jpeg_destroy_decompress().
+	 */
+
+	/* I don't think this can fail. It's harmless to call many times. 
+	 */
+	jpeg_destroy_decompress( &jpeg->cinfo );
+
+}
+
 /* This can be called many times.
  */
 static int
 readjpeg_free( ReadJpeg *jpeg )
 {
-	int result;
-
-	result = 0;
-
 	if( jpeg->eman.pub.num_warnings != 0 ) {
 		g_warning( _( "read gave %ld warnings" ), 
 			jpeg->eman.pub.num_warnings );
@@ -207,24 +224,15 @@ readjpeg_free( ReadJpeg *jpeg )
 		jpeg->eman.pub.num_warnings = 0;
 	}
 
-	/* Don't call jpeg_finish_decompress(). It just checks the tail of the
-	 * file and who cares about that. All mem is freed in
-	 * jpeg_destroy_decompress().
-	 */
+	readjpeg_close_input( jpeg );
 
-	VIPS_FREEF( fclose, jpeg->eman.fp );
 	VIPS_FREE( jpeg->filename );
-	jpeg->eman.fp = NULL;
 
-	/* I don't think this can fail. It's harmless to call many times. 
-	 */
-	jpeg_destroy_decompress( &jpeg->cinfo );
-
-	return( result );
+	return( 0 );
 }
 
 static void
-readjpeg_close( VipsObject *object, ReadJpeg *jpeg )
+readjpeg_close_cb( VipsObject *object, ReadJpeg *jpeg )
 {
 	(void) readjpeg_free( jpeg );
 }
@@ -261,7 +269,7 @@ readjpeg_new( VipsImage *out, int shrink, gboolean fail, gboolean autorotate )
         jpeg_create_decompress( &jpeg->cinfo );
 
 	g_signal_connect( out, "close", 
-		G_CALLBACK( readjpeg_close ), jpeg ); 
+		G_CALLBACK( readjpeg_close_cb ), jpeg ); 
 
 	return( jpeg );
 }
@@ -301,8 +309,6 @@ find_chroma_subsample( struct jpeg_decompress_struct *cinfo )
 static int
 attach_blob( VipsImage *im, const char *field, void *data, int data_length )
 {
-	char *data_copy;
-
 	/* Only use the first one.
 	 */
 	if( vips_image_get_typeof( im, field ) ) {
@@ -317,13 +323,35 @@ attach_blob( VipsImage *im, const char *field, void *data, int data_length )
 	printf( "attach_blob: attaching %d bytes of %s\n", data_length, field );
 #endif /*DEBUG*/
 
-	if( !(data_copy = vips_malloc( NULL, data_length )) )
-		return( -1 );
-	memcpy( data_copy, data, data_length );
-	vips_image_set_blob( im, field, 
-		(VipsCallbackFn) vips_free, data_copy, data_length );
+	vips_image_set_blob_copy( im, field, data, data_length );
 
 	return( 0 );
+}
+
+/* data is the XMP string ... it'll have something like 
+ * "http://ns.adobe.com/xap/1.0/" at the front, then a null character, then
+ * the real XMP.
+ */
+static int
+attach_xmp_blob( VipsImage *im, void *data, int data_length )
+{
+	char *p = (char *) data;
+	int i;
+
+	if( !vips_isprefix( "http", p ) ) 
+		return( 0 );
+
+	/* Search for a null char within the first few characters. 80
+	 * should be plenty for a basic URL.
+	 */
+	for( i = 0; i < 80; i++ )
+		if( !p[i] ) 
+			break;
+	if( p[i] )
+		return( 0 );
+
+	return( attach_blob( im, VIPS_META_XMP_NAME, 
+		p + i + 1, data_length - i - 1 ) );
 }
 
 /* Number of app2 sections we can capture. Each one can be 64k, so 6400k should
@@ -488,7 +516,7 @@ read_jpeg_header( ReadJpeg *jpeg, VipsImage *out )
 
 			if( p->data_length > 4 &&
 				vips_isprefix( "http", (char *) p->data ) &&
-				attach_blob( out, VIPS_META_XMP_NAME, 
+				attach_xmp_blob( out, 
 					p->data, p->data_length ) )
 				return( -1 );
 
@@ -664,11 +692,10 @@ read_jpeg_generate( VipsRegion *or,
 		jpeg->y_pos += 1; 
 	}
 
-	/* Progressive images can have a lot of memory in the decompress
-	 * object, destroy as soon as we can. Safe to call many times. 
+	/* Shut down the input file as soon as we can. 
 	 */
 	if( jpeg->y_pos >= or->im->Ysize ) 
-		jpeg_destroy_decompress( &jpeg->cinfo );
+		readjpeg_close_input( jpeg );
 
 	VIPS_GATE_STOP( "read_jpeg_generate: work" );
 

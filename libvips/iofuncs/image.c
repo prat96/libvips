@@ -16,6 +16,8 @@
  * 	- more severing for vips_image_write()
  * 3/4/18
  * 	- better rules for hasalpha
+ * 9/10/18
+ * 	- fix up vips_image_dump(), it was still using ints not enums
  */
 
 /*
@@ -579,29 +581,8 @@ print_field_fn( VipsImage *image, const char *field, GValue *value, void *a )
 {
 	VipsBuf *buf = (VipsBuf *) a;
 
-	const char *extra;
-	char *str_value;
-
-	/* Look for known enums and decode them.
-	 */
-	extra = NULL;
-	if( strcmp( field, "coding" ) == 0 )
-		extra = vips_enum_nick( 
-			VIPS_TYPE_CODING, g_value_get_int( value ) );
-	else if( strcmp( field, "format" ) == 0 )
-		extra = vips_enum_nick( 
-			VIPS_TYPE_BAND_FORMAT, g_value_get_int( value ) );
-	else if( strcmp( field, "interpretation" ) == 0 )
-		extra = vips_enum_nick( 
-			VIPS_TYPE_INTERPRETATION, g_value_get_int( value ) );
-
-	str_value = g_strdup_value_contents( value );
-	vips_buf_appendf( buf, "%s: %s", field, str_value );
-	g_free( str_value );
-
-	if( extra )
-		vips_buf_appendf( buf, " - %s", extra );
-
+	vips_buf_appendf( buf, "%s: ", field );
+	vips_buf_appendgv( buf, value );
 	vips_buf_appendf( buf, "\n" );
 
 	return( NULL );
@@ -1677,18 +1658,24 @@ vips_image_set_kill( VipsImage *image, gboolean kill )
 	image->kill = kill;
 }
 
-/* Make a name for a filename-less image. Use immediately, don't free the
- * result.
+/* Fills the given buffer with a temporary filename.
+ * Assuming that "int" might be 64 Bit wide a buffer size of 26 suffices.
  */
-static const char *
-vips_image_temp_name( void )
+void
+vips_image_temp_name( char *name, int size )
 {
-	static int serial = 0;
-	static char name[256];
+	static int global_serial = 0;
 
-	vips_snprintf( name, 256, "temp-%d", serial++ );
+	/* Old glibs named this differently.
+	 */
+	int serial =
+#if GLIB_CHECK_VERSION( 2, 30, 0 )
+		g_atomic_int_add( &global_serial, 1 );
+#else
+		g_atomic_int_exchange_and_add( &global_serial, 1 );
+#endif
 
-	return( name );
+	vips_snprintf( name, size, "temp-%d", serial );
 }
 
 /**
@@ -1708,12 +1695,15 @@ VipsImage *
 vips_image_new( void )
 {
 	VipsImage *image;
+	char filename[26];
 
 	vips_check_init();
 
+	vips_image_temp_name( filename, sizeof( filename ) );
+
 	image = VIPS_IMAGE( g_object_new( VIPS_TYPE_IMAGE, NULL ) );
 	g_object_set( image,
-		"filename", vips_image_temp_name(),
+		"filename", filename,
 		"mode", "p",
 		NULL );
 	if( vips_object_build( VIPS_OBJECT( image ) ) ) {
@@ -1760,7 +1750,10 @@ vips_image_new_mode( const char *filename, const char *mode )
 VipsImage *
 vips_image_new_memory( void )
 {
-	return( vips_image_new_mode( vips_image_temp_name(), "t" ) );
+	char filename[26];
+
+	vips_image_temp_name( filename, sizeof( filename ) );
+	return( vips_image_new_mode( filename, "t" ) );
 }
 
 /**
@@ -2023,12 +2016,14 @@ vips_image_new_from_memory( const void *data, size_t size,
 	int width, int height, int bands, VipsBandFormat format )
 {
 	VipsImage *image;
+	char filename[26];
 
 	vips_check_init();
+	vips_image_temp_name( filename, sizeof( filename ) );
 
 	image = VIPS_IMAGE( g_object_new( VIPS_TYPE_IMAGE, NULL ) );
 	g_object_set( image,
-		"filename", vips_image_temp_name(),
+		"filename", filename,
 		"mode", "m",
 		"foreign_buffer", data,
 		"width", width,
@@ -2636,6 +2631,12 @@ vips_image_write_to_buffer( VipsImage *in,
 		ap, in, &blob );
 	va_end( ap );
 
+	if( result )
+		return( -1 );
+
+	*buf = NULL;
+	if( size ) 
+		*size = 0;
 	if( blob ) { 
 		if( buf ) {
 			*buf = VIPS_AREA( blob )->data;
@@ -2647,7 +2648,7 @@ vips_image_write_to_buffer( VipsImage *in,
 		vips_area_unref( VIPS_AREA( blob ) );
 	}
 
-	return( result );
+	return( 0 );
 }
 
 /**
@@ -2923,9 +2924,8 @@ vips_image_hasalpha( VipsImage *image )
  */
 int
 vips_image_write_prepare( VipsImage *image )
-{	
-	if( !vips_object_sanity( VIPS_OBJECT( image ) ) )
-		return( -1 ); 
+{
+	g_assert( vips_object_sanity( VIPS_OBJECT( image ) ) );
 
 	if( image->Xsize <= 0 || 
 		image->Ysize <= 0 || 
@@ -3096,13 +3096,13 @@ vips_image_rewind_output( VipsImage *image )
 	/* Now we've finished writing and reopened as read, we can
 	 * delete-on-close. 
 	 *
-	 * On *nix-like systems, this will unlink the file
-	 * from the filesystem and when we exit, for whatever reason, the file
+	 * On *nix-like systems, this will unlink the file from the 
+	 * filesystem and when we exit, for whatever reason, the file
 	 * we be reclaimed. 
 	 *
 	 * On Windows this will fail because the file is open and you can't
-	 * delete open files. However, on Windows we set O_TEMP, so the file
-	 * will be deleted when the fd is finally closed.
+	 * delete open files. However, on Windows we set _O_TEMPORARY, so the 
+	 * file will be deleted when the fd is finally closed.
 	 */
 	vips_image_delete( image );
 
@@ -3186,8 +3186,7 @@ vips_image_wio_input( VipsImage *image )
 {	
 	VipsImage *t1;
 
-	if( !vips_object_sanity( VIPS_OBJECT( image ) ) )
-		return( -1 ); 
+	g_assert( vips_object_sanity( VIPS_OBJECT( image ) ) );
 
 #ifdef DEBUG_IO
 	printf( "vips_image_wio_input: wio input for %s\n", 
@@ -3411,8 +3410,7 @@ vips_image_inplace( VipsImage *image )
 int
 vips_image_pio_input( VipsImage *image )
 {
-	if( !vips_object_sanity( VIPS_OBJECT( image ) ) )
-		return( -1 ); 
+	g_assert( vips_object_sanity( VIPS_OBJECT( image ) ) );
 
 #ifdef DEBUG_IO
 	printf( "vips_image_pio_input: enabling partial input for %s\n", 

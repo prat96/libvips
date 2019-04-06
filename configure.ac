@@ -2,7 +2,7 @@
 
 # also update the version number in the m4 macros below
 
-AC_INIT([vips], [8.7.0], [vipsip@jiscmail.ac.uk])
+AC_INIT([vips], [8.8.0], [vipsip@jiscmail.ac.uk])
 # required for gobject-introspection
 AC_PREREQ(2.62)
 
@@ -17,7 +17,7 @@ AC_CONFIG_MACRO_DIR([m4])
 
 # user-visible library versioning
 m4_define([vips_major_version], [8])
-m4_define([vips_minor_version], [7])
+m4_define([vips_minor_version], [8])
 m4_define([vips_micro_version], [0])
 m4_define([vips_version],
           [vips_major_version.vips_minor_version.vips_micro_version])
@@ -37,9 +37,9 @@ VIPS_VERSION_STRING=$VIPS_VERSION-`date -u -r ChangeLog`
 #   binary interface changes backwards compatible?: increment age
 #   binary interface changes not backwards compatible?: reset age to 0
 
-LIBRARY_CURRENT=51
+LIBRARY_CURRENT=52
 LIBRARY_REVISION=0
-LIBRARY_AGE=9
+LIBRARY_AGE=10
 
 # patched into include/vips/version.h
 AC_SUBST(VIPS_VERSION)
@@ -461,6 +461,16 @@ AC_CHECK_LIB(m,atan2,[AC_DEFINE(HAVE_ATAN2,1,[have atan2() in libm.])])
 PKG_CHECK_MODULES(REQUIRED, glib-2.0 >= 2.6 gmodule-2.0 gobject-2.0)
 PACKAGES_USED="$PACKAGES_USED glib-2.0 gmodule-2.0 gobject-2.0"
 
+# from 2.12 we have g_base64_encode()
+PKG_CHECK_MODULES(BASE64_ENCODE, glib-2.0 >= 2.12,
+  [AC_DEFINE(HAVE_BASE64_ENCODE,1,
+	    [define if your glib has g_base64_encode().]
+   )
+  ],
+  [:
+  ]
+)
+
 # from 2.14 we have g_option_context_get_help()
 PKG_CHECK_MODULES(CONTEXT_GET_HELP, glib-2.0 >= 2.14,
   [AC_DEFINE(HAVE_CONTEXT_GET_HELP,1,
@@ -505,12 +515,28 @@ PKG_CHECK_MODULES(TYPE_INIT, glib-2.0 < 2.36,
   ]
 )
 
-# from 2.40 we have g_win32_get_command_line() on win
+# from 2.40, on win32 we have g_win32_get_command_line() 
 PKG_CHECK_MODULES(WIN32_GET_COMMAND_LINE, glib-2.0 >= 2.40,
   [if test x"$vips_os_win32" = x"yes"; then
      AC_DEFINE(HAVE_G_WIN32_GET_COMMAND_LINE,1,[define if your glib has g_win32_get_command_line().])
      have_g_win32_get_command_line=yes
    fi
+  ],
+  [:
+  ]
+)
+
+# from 2.40, have g_str_to_ascii()
+PKG_CHECK_MODULES(STR_TO_ASCII, glib-2.0 >= 2.40,
+  [AC_DEFINE(HAVE_G_STR_TO_ASCII,1,[define if your glib has g_str_to_ascii().])
+  ],
+  [:
+  ]
+)
+
+# from 2.48 we have g_uint_checked_mul() etc.
+PKG_CHECK_MODULES(HAVE_CHECKED_MUL, glib-2.0 >= 2.48,
+  [AC_DEFINE(HAVE_CHECKED_MUL,1,[define if your glib has checked multiply.])
   ],
   [:
   ]
@@ -685,6 +711,16 @@ if test x"$magick6" = x"yes"; then
 fi
 
 if test x"$magick6" = x"yes"; then
+  # GM does not have ResetImageProfileIterator
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $MAGICK_LIBS"
+  AC_CHECK_FUNCS(ResetImageProfileIterator,
+    AC_DEFINE(HAVE_RESETIMAGEPROFILEITERATOR,1,
+	      [define if your magick has ResetImageProfileIterator.]))
+  LIBS="$save_LIBS"
+fi
+
+if test x"$magick6" = x"yes"; then
   # more recent magicks have GetVirtualPixels rather than GetImagePixels
   save_LIBS="$LIBS"
   LIBS="$LIBS $MAGICK_LIBS"
@@ -737,12 +773,32 @@ if test x"$magick6" = x"yes"; then
 fi
 
 if test x"$magick6" = x"yes"; then
+  # IM uses SetImageProfile() with StringInfo
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $MAGICK_LIBS"
+  AC_CHECK_FUNCS(BlobToStringInfo,
+    AC_DEFINE(HAVE_BLOBTOSTRINGINFO,1,
+	      [define if your magick has BlobToStringInfo().]))
+  LIBS="$save_LIBS"
+fi
+
+if test x"$magick6" = x"yes"; then
   # GM is missing InheritException
   save_LIBS="$LIBS"
   LIBS="$LIBS $MAGICK_LIBS"
   AC_CHECK_FUNCS(InheritException,
     AC_DEFINE(HAVE_INHERITEXCEPTION,1,
 	      [define if your magick has InheritException.]))
+  LIBS="$save_LIBS"
+fi
+
+if test x"$magick6" = x"yes"; then
+  # GM is missing AcquireExceptionInfo
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $MAGICK_LIBS"
+  AC_CHECK_FUNCS(AcquireExceptionInfo,
+    AC_DEFINE(HAVE_ACQUIREEXCEPTIONINFO,1,
+	      [define if your magick has AcquireExceptionInfo.]))
   LIBS="$save_LIBS"
 fi
 
@@ -763,11 +819,13 @@ if test x"$enable_magicksave" != x"yes"; then
   AC_CHECK_FUNCS(ImportImagePixels,[
      AC_DEFINE(HAVE_IMPORTIMAGEPIXELS,1,
 	       [define if you have ImportImagePixels.])
-   ],[
-     AC_MSG_WARN([ImportImagePixels not found; disabling magicksave])
-     enable_magicksave=no
-   ]
+   ],[]
   )
+  AC_CHECK_FUNCS(ImagesToBlob,[
+     AC_DEFINE(HAVE_IMAGESTOBLOB,1,
+	       [define if you have ImagesToBlob.])
+   ],[]
+  ) 
   LIBS="$save_LIBS"
 fi
 
@@ -825,6 +883,14 @@ if test x"$with_lcms" != x"no"; then
   )
 fi
 
+# we need a conditional for this to only compile in fallback profiles if lcms
+# is detected
+if test x"$with_lcms" != x"no"; then
+  AM_CONDITIONAL(ENABLE_LCMS, true)
+else
+  AM_CONDITIONAL(ENABLE_LCMS, false)
+fi
+
 # OpenEXR
 AC_ARG_WITH([OpenEXR], 
   AS_HELP_STRING([--without-OpenEXR], [build without OpenEXR (default: test)]))
@@ -842,6 +908,95 @@ if test x"$with_OpenEXR" != x"no"; then
   )
 fi
 
+# nifti
+AC_ARG_WITH([nifti],
+  AS_HELP_STRING([--without-nifti], [build without nifti (default: test)]))
+
+if test x"$with_nifti" != x"no"; then
+  FIND_NIFTI([
+     with_nifti=yes
+    ],[
+     with_nifti=no
+    ]
+  )
+fi
+
+# libheif
+AC_ARG_WITH([heif], 
+  AS_HELP_STRING([--without-heif], [build without libheif (default: test)]))
+
+if test x"$with_heif" != x"no"; then
+  PKG_CHECK_MODULES(HEIF, libheif,
+    [AC_DEFINE(HAVE_HEIF,1,[define if you have libheif installed.])
+     with_heif=yes
+     PACKAGES_USED="$PACKAGES_USED libheif"
+    ],
+    [AC_MSG_WARN([libheif not found; disabling HEIF support])
+     with_heif=no
+    ]
+  )
+fi
+
+# heif_context_set_primary_image not in 1.1
+if test x"$with_heif" = x"yes"; then
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $HEIF_LIBS"
+  AC_CHECK_FUNCS(heif_context_set_primary_image,[
+     AC_DEFINE(HAVE_HEIF_CONTEXT_SET_PRIMARY_IMAGE,1,
+	       [define if you have heif_context_set_primary_image.])
+   ],[]
+  )
+  LIBS="$save_LIBS"
+fi
+
+# heif_encoding_options_alloc not in 1.1
+if test x"$with_heif" = x"yes"; then
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $HEIF_LIBS"
+  AC_CHECK_FUNCS(heif_encoding_options_alloc,[
+     AC_DEFINE(HAVE_HEIF_ENCODING_OPTIONS_ALLOC,1,
+	       [define if you have heif_encoding_options_alloc.])
+   ],[]
+  )
+  LIBS="$save_LIBS"
+fi
+
+# exif/xmp profile support not in 1.1
+if test x"$with_heif" = x"yes"; then
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $HEIF_LIBS"
+  AC_CHECK_FUNCS(heif_context_add_exif_metadata,[
+     AC_DEFINE(HAVE_HEIF_CONTEXT_ADD_EXIF_METADATA,1,
+	       [define if you have heif_context_add_exif_metadata.])
+   ],[]
+  )
+  LIBS="$save_LIBS"
+fi
+
+# color profile support added in 1.3.3
+if test x"$with_heif" = x"yes"; then
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $HEIF_LIBS"
+  AC_CHECK_FUNCS(heif_image_handle_get_raw_color_profile,[
+     AC_DEFINE(HAVE_HEIF_COLOR_PROFILE,1,
+	       [define if you have heif_image_handle_get_raw_color_profile.])
+   ],[]
+  )
+  LIBS="$save_LIBS"
+fi
+
+# fetch untransformed width/height added in 1.3.4
+if test x"$with_heif" = x"yes"; then
+  save_LIBS="$LIBS"
+  LIBS="$LIBS $HEIF_LIBS"
+  AC_CHECK_FUNCS(heif_image_handle_get_ispe_width,[
+     AC_DEFINE(HAVE_HEIF_IMAGE_HANDLE_GET_ISPE_WIDTH,1,
+	       [define if you have heif_image_handle_get_ispe_width.])
+   ],[]
+  )
+  LIBS="$save_LIBS"
+fi
+
 # pdfium
 AC_ARG_WITH([pdfium],
   AS_HELP_STRING([--without-pdfium], [build without pdfium (default: test)]))
@@ -852,6 +1007,7 @@ if test x"$with_pdfium" != x"no"; then
        AC_MSG_WARN([PDFium found, disabling poppler])
        with_poppler=no
      fi
+     EXTRA_LIBS_USED="$EXTRA_LIBS_USED $PDFIUM_LIBS"
      with_pdfium=yes
     ],[
      with_pdfium=no
@@ -1000,42 +1156,20 @@ if test x"$with_cfitsio" != x"no"; then
   )
 fi
 
-# libwebp
-# some platforms, like ubuntu 12.04, are missing the .pc files for libwebp, so
-# we fall back to FIND_LIBWEBP
+# libwebp ... target 0.5+ to reduce complication
+# webp has the stuff for handling metadata in two separate libraries  -- we
+# insit on having all of them
 AC_ARG_WITH([libwebp], 
   AS_HELP_STRING([--without-libwebp], [build without libwebp (default: test)]))
 
 if test x"$with_libwebp" != x"no"; then
-  PKG_CHECK_MODULES(LIBWEBP, libwebp >= 0.1.3,
-    [AC_DEFINE(HAVE_LIBWEBP,1,[define if you have libwebp installed.])
+  PKG_CHECK_MODULES(LIBWEBP, libwebp >= 0.5 libwebpmux >= 0.5 libwebpdemux >= 0.5,
+    [AC_DEFINE(HAVE_LIBWEBP,1,[define if you have libwebp/libwebpmux/libwebpdemux installed.])
      with_libwebp=yes
-     PACKAGES_USED="$PACKAGES_USED libwebp"
+     PACKAGES_USED="$PACKAGES_USED libwebp libwebpmux libwebpdemux"
     ],
-    [FIND_LIBWEBP(
-       [with_libwebp="yes (found by search)"
-       ], 
-       [AC_MSG_WARN([libwebp not found; disabling WEBP support])
-        with_libwebp=no
-       ]
-     )
-    ]
-  )
-fi
-
-# webp has the stuff for pulling out ICC profile etc in a separate library
-# 
-# we can build with libwebpmux back to 0.3, but it's not until libwebp 0.5 that
-# we can read that metadata back successfully ... insist on 0.5 so that tests
-# can work smoothly
-if test x"$with_libwebp" != x"no"; then
-  PKG_CHECK_MODULES(LIBWEBPMUX, libwebpmux >= 0.5.0,
-    [AC_DEFINE(HAVE_LIBWEBPMUX,1,[define if you have libwebpmux installed.])
-     with_libwebpmux=yes
-     PACKAGES_USED="$PACKAGES_USED libwebpmux"
-    ],
-    [AC_MSG_WARN([libwebpmux not found; disabling webp metadata support])
-     with_libwebpmux=no
+    [AC_MSG_WARN([libwebp, mux, demux not found; disabling WEBP support])
+     with_libwebp=no
     ]
   )
 fi
@@ -1172,7 +1306,7 @@ if test x"$with_jpeg" != x"no"; then
     ],
     [FIND_JPEG(
        [with_jpeg="yes (found by search)"
-	EXTRA_LIBS_USED="$EXTRA_LIBS_USED -ljpeg"
+        EXTRA_LIBS_USED="$EXTRA_LIBS_USED -ljpeg"
        ],
        [AC_MSG_WARN([libjpeg not found; disabling JPEG support])
         with_jpeg=no
@@ -1278,14 +1412,14 @@ fi
 # Gather all up for VIPS_CFLAGS, VIPS_INCLUDES, VIPS_LIBS 
 # sort includes to get longer, more specific dirs first
 # helps, for example, selecting graphicsmagick over imagemagick
-VIPS_CFLAGS=`for i in $VIPS_CFLAGS $GTHREAD_CFLAGS $REQUIRED_CFLAGS $EXPAT_CFLAGS $ZLIB_CFLAGS $PANGOFT2_CFLAGS $GSF_CFLAGS $FFTW_CFLAGS $MAGICK_CFLAGS $JPEG_CFLAGS $PNG_CFLAGS $IMAGEQUANT_CFLAGS $EXIF_CFLAGS $MATIO_CFLAGS $CFITSIO_CFLAGS $LIBWEBP_CFLAGS $LIBWEBPMUX_CFLAGS $GIFLIB_INCLUDES $RSVG_CFLAGS $PDFIUM_INCLUDES $POPPLER_CFLAGS $OPENEXR_CFLAGS $OPENSLIDE_CFLAGS $ORC_CFLAGS $TIFF_CFLAGS $LCMS_CFLAGS 
+VIPS_CFLAGS=`for i in $VIPS_CFLAGS $GTHREAD_CFLAGS $REQUIRED_CFLAGS $EXPAT_CFLAGS $ZLIB_CFLAGS $PANGOFT2_CFLAGS $GSF_CFLAGS $FFTW_CFLAGS $MAGICK_CFLAGS $JPEG_CFLAGS $PNG_CFLAGS $IMAGEQUANT_CFLAGS $EXIF_CFLAGS $MATIO_CFLAGS $CFITSIO_CFLAGS $LIBWEBP_CFLAGS $LIBWEBPMUX_CFLAGS $GIFLIB_INCLUDES $RSVG_CFLAGS $PDFIUM_INCLUDES $POPPLER_CFLAGS $OPENEXR_CFLAGS $OPENSLIDE_CFLAGS $ORC_CFLAGS $TIFF_CFLAGS $LCMS_CFLAGS $HEIF_CFLAGS
 do 
 	echo $i 
 done | sort -ru`
 VIPS_CFLAGS=`echo $VIPS_CFLAGS`
 VIPS_CFLAGS="$VIPS_DEBUG_FLAGS $VIPS_CFLAGS"
-VIPS_INCLUDES="$ZLIB_INCLUDES $PNG_INCLUDES $TIFF_INCLUDES $JPEG_INCLUDES" 
-VIPS_LIBS="$ZLIB_LIBS $MAGICK_LIBS $PNG_LIBS $IMAGEQUANT_LIBS $TIFF_LIBS $JPEG_LIBS $GTHREAD_LIBS $REQUIRED_LIBS $EXPAT_LIBS $PANGOFT2_LIBS $GSF_LIBS $FFTW_LIBS $ORC_LIBS $LCMS_LIBS $GIFLIB_LIBS $RSVG_LIBS $PDFIUM_LIBS $POPPLER_LIBS $OPENEXR_LIBS $OPENSLIDE_LIBS $CFITSIO_LIBS $LIBWEBP_LIBS $LIBWEBPMUX_LIBS $MATIO_LIBS $EXIF_LIBS -lm"
+VIPS_INCLUDES="$ZLIB_INCLUDES $PNG_INCLUDES $TIFF_INCLUDES $JPEG_INCLUDES $NIFTI_INCLUDES" 
+VIPS_LIBS="$ZLIB_LIBS $HEIF_LIBS $MAGICK_LIBS $PNG_LIBS $IMAGEQUANT_LIBS $TIFF_LIBS $JPEG_LIBS $GTHREAD_LIBS $REQUIRED_LIBS $EXPAT_LIBS $PANGOFT2_LIBS $GSF_LIBS $FFTW_LIBS $ORC_LIBS $LCMS_LIBS $GIFLIB_LIBS $RSVG_LIBS $NIFTI_LIBS $PDFIUM_LIBS $POPPLER_LIBS $OPENEXR_LIBS $OPENSLIDE_LIBS $CFITSIO_LIBS $LIBWEBP_LIBS $LIBWEBPMUX_LIBS $MATIO_LIBS $EXIF_LIBS -lm"
 
 AC_SUBST(VIPS_LIBDIR)
 
@@ -1341,6 +1475,8 @@ AC_OUTPUT([
 	python/packages/gi/overrides/Makefile 
 	test/Makefile 
 	test/variables.sh
+	test/test-suite/Makefile
+	test/test-suite/helpers/Makefile
 	swig/Makefile 
 	swig/vipsCC/Makefile 
 	man/Makefile
@@ -1375,6 +1511,8 @@ save with libMagick: 			$enable_magicksave
 accelerate loops with orc: 		$with_orc
   (requires orc-0.4.11 or later)
 ICC profile support with lcms: 		$with_lcms
+file import with niftiio: 		$with_nifti
+file import with libheif: 		$with_heif
 file import with OpenEXR: 		$with_OpenEXR
 file import with OpenSlide:		$with_openslide
   (requires openslide-3.3.0 or later)
@@ -1387,9 +1525,7 @@ SVG import with librsvg-2.0: 		$with_rsvg
 zlib: 					$with_zlib
 file import with cfitsio: 		$with_cfitsio
 file import/export with libwebp:	$with_libwebp
-  (requires libwebp-0.1.3 or later)
-support webp metadata:			$with_libwebpmux
-  (requires libwebpmux-0.5 or later)
+  (requires libwebp, libwebpmux, libwebpdemux 0.5.0 or later)
 text rendering with pangoft2: 		$with_pangoft2
 file import/export with libpng: 	$with_png
   (requires libpng-1.2.9 or later)

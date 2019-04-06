@@ -981,7 +981,7 @@ vips_foreign_load_build( VipsObject *object )
 
 	/* Tell downstream if we are reading sequentially.
 	 */
-	if( sequential )
+	if( sequential ) 
 		vips_image_set_area( load->out, 
 			VIPS_META_SEQUENTIAL, NULL, NULL ); 
 
@@ -1028,42 +1028,42 @@ vips_foreign_load_class_init( VipsForeignLoadClass *class )
 		VIPS_ARGUMENT_REQUIRED_OUTPUT, 
 		G_STRUCT_OFFSET( VipsForeignLoad, out ) );
 
-	VIPS_ARG_FLAGS( class, "flags", 6, 
+	VIPS_ARG_FLAGS( class, "flags", 106, 
 		_( "Flags" ), 
 		_( "Flags for this file" ),
 		VIPS_ARGUMENT_OPTIONAL_OUTPUT,
 		G_STRUCT_OFFSET( VipsForeignLoad, flags ),
 		VIPS_TYPE_FOREIGN_FLAGS, VIPS_FOREIGN_NONE ); 
 
-	VIPS_ARG_BOOL( class, "memory", 7, 
+	VIPS_ARG_BOOL( class, "memory", 107, 
 		_( "Memory" ), 
 		_( "Force open via memory" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoad, memory ),
 		FALSE );
 
-	VIPS_ARG_ENUM( class, "access", 8, 
+	VIPS_ARG_ENUM( class, "access", 108, 
 		_( "Access" ), 
 		_( "Required access pattern for this file" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoad, access ),
 		VIPS_TYPE_ACCESS, VIPS_ACCESS_RANDOM ); 
 
-	VIPS_ARG_BOOL( class, "sequential", 10, 
+	VIPS_ARG_BOOL( class, "sequential", 109, 
 		_( "Sequential" ), 
 		_( "Sequential read only" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
 		G_STRUCT_OFFSET( VipsForeignLoad, sequential ),
 		FALSE );
 
-	VIPS_ARG_BOOL( class, "fail", 11, 
+	VIPS_ARG_BOOL( class, "fail", 110, 
 		_( "Fail" ), 
 		_( "Fail on first error" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoad, fail ),
 		FALSE );
 
-	VIPS_ARG_BOOL( class, "disc", 12, 
+	VIPS_ARG_BOOL( class, "disc", 111, 
 		_( "Disc" ), 
 		_( "Open to disc" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
@@ -1259,15 +1259,6 @@ vips__foreign_convert_saveable( VipsImage *in, VipsImage **ready,
 		g_object_unref( in );
 
 		in = out;
-
-		/* We've imported to PCS, we must remove the embedded profile,
-		 * since it no longer matches the image.
-		 *
-		 * For example, when converting CMYK JPG to RGB PNG, we need 
-		 * to remove the CMYK profile on import, or the png writer will 
-		 * try to attach it when we write the image as RGB.
-		 */
-		vips_image_remove( in, VIPS_META_ICC_NAME );
 	}
 
 	/* If this is something other than CMYK or RAD, eg. maybe a LAB image,
@@ -1515,10 +1506,10 @@ vips__foreign_convert_saveable( VipsImage *in, VipsImage **ready,
 	/* Some format libraries, like libpng, will throw a hard error if the 
 	 * profile is inappropriate for this image type. With profiles inherited
 	 * from a source image, this can happen all the time, so we 
-	 * want to just drop the profile in this case.
+	 * want to silently drop the profile in this case.
 	 */
 	if( vips_image_get_typeof( in, VIPS_META_ICC_NAME ) ) {
-		void *data;
+		const void *data;
 		size_t length;
 
 		if( !vips_image_get_blob( in, VIPS_META_ICC_NAME, 
@@ -1703,6 +1694,78 @@ vips_foreign_find_save( const char *name )
 	return( G_OBJECT_CLASS_NAME( save_class ) );
 }
 
+static void *
+vips_foreign_get_suffixes_count_cb( VipsForeignSaveClass *save_class, 
+	void *a, void *b )
+{
+	VipsForeignClass *foreign_class = VIPS_FOREIGN_CLASS( save_class );
+	int *n_fields = (int *) a;
+
+	int i;
+
+	if( foreign_class->suffs )
+		for( i = 0; foreign_class->suffs[i]; i++ )
+			*n_fields += 1;
+
+	return( NULL ); 
+}
+
+static void *
+vips_foreign_get_suffixes_add_cb( VipsForeignSaveClass *save_class, 
+	void *a, void *b )
+{
+	VipsForeignClass *foreign_class = VIPS_FOREIGN_CLASS( save_class );
+	gchar ***p = (gchar ***) a;
+
+	int i;
+
+	if( foreign_class->suffs )
+		for( i = 0; foreign_class->suffs[i]; i++ ) {
+			**p = g_strdup( foreign_class->suffs[i] ); 
+			*p += 1;
+		}
+
+	return( NULL ); 
+}
+
+/**
+ * vips_foreign_get_suffixes: (method)
+ *
+ * Get a %NULL-terminated array listing all the supported suffixes. 
+ *
+ * This is not the same as all the supported file types, since libvips 
+ * detects image format for load by testing the first few bytes. 
+ *
+ * Use vips_foreign_find_load() to detect type for a specific file.
+ *
+ * Free the return result with g_strfreev().
+ *
+ * Returns: (transfer full): all supported file extensions, as a 
+ * %NULL-terminated array. 
+ */
+gchar ** 
+vips_foreign_get_suffixes( void )
+{
+	int n_suffs;
+	gchar **suffs;
+	gchar **p;
+
+	n_suffs = 0;
+	(void) vips_foreign_map( 
+		"VipsForeignSave",
+		(VipsSListMap2Fn) vips_foreign_get_suffixes_count_cb, 
+		&n_suffs, NULL );
+
+	suffs = g_new0( gchar *, n_suffs + 1 ); 
+	p = suffs;
+	(void) vips_foreign_map( 
+		"VipsForeignSave",
+		(VipsSListMap2Fn) vips_foreign_get_suffixes_add_cb, 
+		&p, NULL );
+
+	return( suffs ); 
+}
+
 /* Kept for early vips8 API compat.
  */
 
@@ -1836,6 +1899,14 @@ vips_foreign_operation_init( void )
 	extern GType vips_foreign_load_svg_get_type( void ); 
 	extern GType vips_foreign_load_svg_file_get_type( void ); 
 	extern GType vips_foreign_load_svg_buffer_get_type( void ); 
+	extern GType vips_foreign_load_heif_get_type( void ); 
+	extern GType vips_foreign_load_heif_file_get_type( void ); 
+	extern GType vips_foreign_load_heif_buffer_get_type( void ); 
+	extern GType vips_foreign_save_heif_get_type( void ); 
+	extern GType vips_foreign_save_heif_file_get_type( void ); 
+	extern GType vips_foreign_save_heif_buffer_get_type( void ); 
+	extern GType vips_foreign_load_nifti_get_type( void ); 
+	extern GType vips_foreign_save_nifti_get_type( void ); 
 	extern GType vips_foreign_load_gif_get_type( void ); 
 	extern GType vips_foreign_load_gif_file_get_type( void ); 
 	extern GType vips_foreign_load_gif_buffer_get_type( void ); 
@@ -1957,6 +2028,20 @@ vips_foreign_operation_init( void )
 #ifdef HAVE_OPENEXR
 	vips_foreign_load_openexr_get_type(); 
 #endif /*HAVE_OPENEXR*/
+
+#ifdef HAVE_NIFTI
+	vips_foreign_load_nifti_get_type(); 
+	vips_foreign_save_nifti_get_type(); 
+#endif /*HAVE_NIFTI*/
+
+#ifdef HAVE_HEIF
+	vips_foreign_load_heif_get_type(); 
+	vips_foreign_load_heif_file_get_type(); 
+	vips_foreign_load_heif_buffer_get_type(); 
+	vips_foreign_save_heif_get_type(); 
+	vips_foreign_save_heif_file_get_type(); 
+	vips_foreign_save_heif_buffer_get_type(); 
+#endif /*HAVE_HEIF*/
 
 	vips__foreign_load_operation = 
 		g_quark_from_static_string( "vips-foreign-load-operation" ); 

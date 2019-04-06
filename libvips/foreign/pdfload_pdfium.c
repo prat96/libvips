@@ -4,6 +4,8 @@
  * 	- from pdfload.c
  * 8/6/18
  * 	- add background param
+ * 16/8/18
+ * 	- shut down the input file as soon as we can [kleisauke]
  */
 
 /*
@@ -135,14 +137,21 @@ vips_pdfium_error( void )
 }
 
 static void
+vips_foreign_load_pdf_close( VipsForeignLoadPdf *pdf )
+{
+	VIPS_FREEF( FPDF_ClosePage, pdf->page ); 
+	VIPS_FREEF( FPDF_CloseDocument, pdf->doc ); 
+}
+
+static void
 vips_foreign_load_pdf_dispose( GObject *gobject )
 {
 	VipsForeignLoadPdf *pdf = (VipsForeignLoadPdf *) gobject;
 
-	VIPS_FREEF( FPDF_ClosePage, pdf->page ); 
-	VIPS_FREEF( FPDF_CloseDocument, pdf->doc ); 
+	vips_foreign_load_pdf_close( pdf ); 
 
-	G_OBJECT_CLASS( vips_foreign_load_pdf_parent_class )->dispose( gobject );
+	G_OBJECT_CLASS( vips_foreign_load_pdf_parent_class )->
+		dispose( gobject );
 }
 
 static void *
@@ -344,12 +353,11 @@ vips_foreign_load_pdf_header( VipsForeignLoad *load )
 		top += pdf->pages[i].height;
 	}
 
-	/* If all pages are the same size, we can tag this as a toilet roll
-	 * image and tiffsave will be able to save it as a multipage tiff.
+	/* If all pages are the same height, we can tag this as a toilet roll
+	 * image.
 	 */
 	for( i = 1; i < pdf->n; i++ ) 
-		if( pdf->pages[i].width != pdf->pages[0].width ||
-			pdf->pages[i].height != pdf->pages[0].height )
+		if( pdf->pages[i].height != pdf->pages[0].height )
 			break;
 	if( i == pdf->n ) 
 		vips_image_set_int( load->out, 
@@ -373,6 +381,7 @@ vips_foreign_load_pdf_generate( VipsRegion *or,
 	void *seq, void *a, void *b, gboolean *stop )
 {
 	VipsForeignLoadPdf *pdf = (VipsForeignLoadPdf *) a;
+	VipsForeignLoad *load = (VipsForeignLoad *) pdf;
 	VipsRect *r = &or->valid;
 
 	int top;
@@ -422,6 +431,13 @@ vips_foreign_load_pdf_generate( VipsRegion *or,
 		top += rect.height;
 		i += 1;
 	}
+
+	/* In seq mode, we can shut down the input when we render the last
+	 * row.
+	 */
+	if( top >= or->im->Ysize &&
+		load->access == VIPS_ACCESS_SEQUENTIAL )
+		vips_foreign_load_pdf_close( pdf ); 
 
 	/* PDFium writes BRGA, we must swap.
 	 *

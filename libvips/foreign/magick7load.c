@@ -4,8 +4,10 @@
  * 	- from magickload
  * 25/11/16
  * 	- add @n, deprecate @all_frames (just sets n = -1)
- * 24/4/18
- * 	- add format hint
+ * 24/7/18
+ * 	- sniff extra filetypes
+ * 4/2/19
+ * 	- add profile (xmp, ipct, etc.) read
  */
 
 /*
@@ -67,7 +69,6 @@ typedef struct _VipsForeignLoadMagick7 {
 	 */
 	gboolean all_frames;
 
-	char *format;			/* Format hint */
 	char *density;			/* Load at this resolution */
 	int page;			/* Load this page (frame) */
 	int n;				/* Load this many pages */
@@ -280,7 +281,7 @@ vips_foreign_load_magick7_dispose( GObject *gobject )
 	VIPS_FREEF( DestroyImageInfo, magick7->image_info ); 
 	VIPS_FREE( magick7->frames );
 	VIPS_FREE( magick7->cache_view );
-	VIPS_FREEF( DestroyExceptionInfo, magick7->exception ); 
+	VIPS_FREEF( magick_destroy_exception, magick7->exception ); 
 	VIPS_FREEF( vips_g_mutex_free, magick7->lock );
 
 	G_OBJECT_CLASS( vips_foreign_load_magick7_parent_class )->
@@ -299,7 +300,7 @@ vips_foreign_load_magick7_build( VipsObject *object )
 	magick_genesis();
 
 	magick7->image_info = CloneImageInfo( NULL );
-	magick7->exception = AcquireExceptionInfo();
+	magick7->exception = magick_acquire_exception();
 	magick7->lock = vips_g_mutex_new();
 
 	if( !magick7->image_info ) 
@@ -307,12 +308,6 @@ vips_foreign_load_magick7_build( VipsObject *object )
 
 	if( magick7->all_frames )
 		magick7->n = -1;
-
-	/* The file format hint, eg. "ICO".
-	 */
-	if( magick7->format ) 
-		vips_strncpy( magick7->image_info->magick, 
-			magick7->format, MaxTextExtent );
 
 	/* Canvas resolution for rendering vector formats like SVG.
 	 */
@@ -364,35 +359,28 @@ vips_foreign_load_magick7_class_init( VipsForeignLoadMagick7Class *class )
 		vips_foreign_load_magick7_get_flags_filename;
 	load_class->get_flags = vips_foreign_load_magick7_get_flags;
 
-	VIPS_ARG_STRING( class, "format", 3,
-		_( "Format" ),
-		_( "Image format hint" ),
-		VIPS_ARGUMENT_OPTIONAL_INPUT,
-		G_STRUCT_OFFSET( VipsForeignLoadMagick7, format ),
-		NULL );
-
-	VIPS_ARG_STRING( class, "density", 4,
+	VIPS_ARG_STRING( class, "density", 20,
 		_( "Density" ),
 		_( "Canvas resolution for rendering vector formats like SVG" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, density ),
 		NULL );
 
-	VIPS_ARG_INT( class, "page", 5,
+	VIPS_ARG_INT( class, "page", 21,
 		_( "Page" ),
 		_( "Load this page from the file" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, page ),
 		0, 100000, 0 );
 
-	VIPS_ARG_INT( class, "n", 6,
+	VIPS_ARG_INT( class, "n", 22,
 		_( "n" ),
 		_( "Load this many pages" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT,
 		G_STRUCT_OFFSET( VipsForeignLoadMagick7, n ),
 		-1, 100000, 1 );
 
-	VIPS_ARG_BOOL( class, "all_frames", 7, 
+	VIPS_ARG_BOOL( class, "all_frames", 23, 
 		_( "all_frames" ), 
 		_( "Read all frames from an image" ),
 		VIPS_ARGUMENT_OPTIONAL_INPUT | VIPS_ARGUMENT_DEPRECATED,
@@ -541,7 +529,7 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 
 	vips_image_pipelinev( out, VIPS_DEMAND_STYLE_SMALLTILE, NULL );
 
-	/* Get all the metadata.
+	/* Get all the string metadata.
 	 */
 	ResetImagePropertyIterator( image );
 	while( (key = GetNextImageProperty( image )) ) {
@@ -557,6 +545,11 @@ vips_foreign_load_magick7_parse( VipsForeignLoadMagick7 *magick7,
 		vips_buf_appendf( &name, "magick-%s", key );
 		vips_image_set_string( out, vips_buf_all( &name ), value );
 	}
+
+	/* Set vips metadata from ImageMagick profiles.
+	 */
+	if( magick_set_vips_profile( out, image ) )
+		return( -1 );
 
 	magick7->n_pages = GetImageListLength( GetFirstImageInList( image ) );
 #ifdef DEBUG
@@ -774,13 +767,14 @@ ismagick7( const char *filename )
 	/* Horribly slow :-(
 	 */
 	image_info = CloneImageInfo( NULL );
-	exception = AcquireExceptionInfo();
+	exception = magick_acquire_exception();
 	vips_strncpy( image_info->filename, filename, MagickPathExtent );
+	magick_sniff_file( image_info, filename );
 	image = PingImage( image_info, exception );
 	result = image != NULL;
 	VIPS_FREEF( DestroyImageList, image );
 	VIPS_FREEF( DestroyImageInfo, image_info ); 
-	VIPS_FREEF( DestroyExceptionInfo, exception ); 
+	VIPS_FREEF( magick_destroy_exception, exception ); 
 
 	return( result );
 }
@@ -797,6 +791,8 @@ vips_foreign_load_magick7_file_header( VipsForeignLoad *load )
 
 	vips_strncpy( magick7->image_info->filename, file->filename, 
 		MagickPathExtent );
+
+	magick_sniff_file( magick7->image_info, file->filename );
 
 	/* It would be great if we could PingImage and just read the header,
 	 * but sadly many IM coders do not support ping. The critical one for
@@ -874,12 +870,13 @@ vips_foreign_load_magick7_buffer_is_a_buffer( const void *buf, size_t len )
 	/* Horribly slow :-(
 	 */
 	image_info = CloneImageInfo( NULL );
-	exception = AcquireExceptionInfo();
+	exception = magick_acquire_exception();
+	magick_sniff_bytes( image_info, buf, len );
 	image = PingBlob( image_info, buf, len, exception );
 	result = image != NULL;
 	VIPS_FREEF( DestroyImageList, image );
 	VIPS_FREEF( DestroyImageInfo, image_info ); 
-	VIPS_FREEF( DestroyExceptionInfo, exception ); 
+	VIPS_FREEF( magick_destroy_exception, exception ); 
 
 	return( result );
 }
@@ -901,6 +898,8 @@ vips_foreign_load_magick7_buffer_header( VipsForeignLoad *load )
 	 * 
 	 * We have to read the whole image in _header.
 	 */
+	magick_sniff_bytes( magick7->image_info, 
+		magick7_buffer->buf->data, magick7_buffer->buf->length );
 	magick7->image = BlobToImage( magick7->image_info, 
 		magick7_buffer->buf->data, magick7_buffer->buf->length,
 		magick7->exception );

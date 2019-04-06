@@ -79,12 +79,17 @@ void
 im_filename_split( const char *path, char *name, char *mode )
 {
         char *p;
+	size_t len;
 
         vips_strncpy( name, path, FILENAME_MAX );
+	strcpy( mode, "" );
 
-	/* Search back towards start stopping at each ':' char.
+	if( (len = strlen( name )) == 0 ) 
+	       return;	
+
+	/* Search backwards towards start, stopping at each ':' char.
 	 */
-	for( p = name + strlen( name ) - 1; p > name; p -= 1 )
+	for( p = name + len - 1; p > name; p -= 1 )
 		if( *p == ':' ) {
 			char *q;
 
@@ -120,8 +125,6 @@ im_filename_split( const char *path, char *name, char *mode )
                 vips_strncpy( mode, p + 1, FILENAME_MAX );
                 *p = '\0';
         }
-        else
-                strcpy( mode, "" );
 }
 
 /** 
@@ -603,7 +606,7 @@ lookup_enum( GType type, const char *names[], const char *name )
 		return( value->value );
 
 	for( i = 0; names[i]; i++ )
-		if( strcasecmp( names[i], name ) == 0 )
+		if( g_ascii_strcasecmp( names[i], name ) == 0 )
 			return( i );
 
 	return( -1 );
